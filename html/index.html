@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Partículas 3D</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: sans-serif; }
+    canvas { display: block; }
+    #controles {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    button {
+      padding: 10px 20px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      backdrop-filter: blur(4px);
+      transition: all 0.2s;
+    }
+    button:hover { background: rgba(255,255,255,0.25); }
+    button.activo { background: #7F77DD; border-color: #7F77DD; }
+    #info {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.4);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="controles">
+  <button onclick="setForma('corazon')" class="activo" id="btn-corazon">❤ Corazón</button>
+  <button onclick="setForma('saturno')" id="btn-saturno">🪐 Saturno</button>
+  <button onclick="setForma('flor')" id="btn-flor">🌸 Flor</button>
+  <button onclick="setForma('fuegos')" id="btn-fuegos">🎆 Fuegos</button>
+  <button onclick="setForma('esfera')" id="btn-esfera">⚪ Esfera</button>
+</div>
+
+<p id="info">Arrastra para rotar · Rueda del mouse para zoom</p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+
+  /* ── ESCENA ── */
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  document.body.appendChild(renderer.domElement);
+
+  const scene  = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.z = 5;
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  /* ── PARTÍCULAS ── */
+  const N = 4000;
+  const geo = new THREE.BufferGeometry();
+  const pos  = new Float32Array(N * 3);
+  const col  = new Float32Array(N * 3);
+  const dest = new Float32Array(N * 3);
+  const vel  = new Float32Array(N);
+
+  for (let i = 0; i < N; i++) {
+    pos[i*3]   = (Math.random() - 0.5) * 6;
+    pos[i*3+1] = (Math.random() - 0.5) * 6;
+    pos[i*3+2] = (Math.random() - 0.5) * 6;
+    vel[i] = 0.02 + Math.random() * 0.03;
+  }
+
+  geo.setAttribute('position', new THREE.BufferAttribute(pos,  3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(col,  3));
+
+  const mat = new THREE.PointsMaterial({
+    size: 0.06, vertexColors: true, transparent: true, opacity: 0.9
+  });
+
+  const puntos = new THREE.Points(geo, mat);
+  scene.add(puntos);
+
+  /* ── FORMAS ── */
+  const paletas = {
+    corazon: [[1,0.2,0.4],[1,0.5,0.1],[1,0.8,0.2]],
+    saturno:  [[0.3,0.6,1],[0.5,0.9,0.7],[0.8,0.7,0.3]],
+    flor:     [[1,0.4,0.8],[1,0.7,0.1],[0.4,0.9,0.4]],
+    fuegos:   [[1,0.3,0.1],[0.2,0.8,1],[1,0.9,0.1],[0.8,0.2,1]],
+    esfera:   [[0.5,0.8,1],[0.3,1,0.7],[0.9,0.5,1]]
+  };
+
+  function corazonPos() {
+    const t = Math.random() * Math.PI * 2;
+    return [
+      (16*Math.pow(Math.sin(t),3)) / 18 + (Math.random()-0.5)*0.15,
+      (13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t)) / 18 + (Math.random()-0.5)*0.15,
+      (Math.random()-0.5)*0.3
+    ];
+  }
+
+  function saturnoPos() {
+    if (Math.random() < 0.5) {
+      const phi   = Math.acos(2*Math.random()-1);
+      const theta = Math.random()*Math.PI*2;
+      const r     = 0.9 + Math.random()*0.1;
+      return [r*Math.sin(phi)*Math.cos(theta), r*Math.sin(phi)*Math.sin(theta)*0.6, r*Math.cos(phi)];
+    } else {
+      const a = Math.random()*Math.PI*2;
+      const r = 1.3 + Math.random()*0.8;
+      return [r*Math.cos(a), (Math.random()-0.5)*0.05, r*Math.sin(a)*0.3];
+    }
+  }
+
+  function florPos() {
+    const petalo = Math.floor(Math.random()*6);
+    const ang    = (petalo/6)*Math.PI*2;
+    const r      = Math.random()*1.2;
+    const t      = Math.random()*Math.PI;
+    return [
+      r*Math.cos(ang) + Math.cos(ang+Math.PI/2)*Math.sin(t)*0.3,
+      r*Math.sin(ang) + Math.sin(ang+Math.PI/2)*Math.sin(t)*0.3,
+      (Math.random()-0.5)*0.2
+    ];
+  }
+
+  function fuegosPos() {
+    const bx = (Math.floor(Math.random()*5)-2)*0.8;
+    const by = (Math.random()-0.5)*1.5;
+    const phi   = Math.acos(2*Math.random()-1);
+    const theta = Math.random()*Math.PI*2;
+    const r     = 0.3 + Math.random()*0.8;
+    return [bx+r*Math.sin(phi)*Math.cos(theta), by+r*Math.sin(phi)*Math.sin(theta), r*Math.cos(phi)*0.5];
+  }
+
+  function esferaPos() {
+    const phi   = Math.acos(2*Math.random()-1);
+    const theta = Math.random()*Math.PI*2;
+    const r     = 1.2 + (Math.random()-0.5)*0.3;
+    return [r*Math.sin(phi)*Math.cos(theta), r*Math.sin(phi)*Math.sin(theta), r*Math.cos(phi)];
+  }
+
+  function setForma(forma) {
+    document.querySelectorAll('button').forEach(b => b.classList.remove('activo'));
+    document.getElementById('btn-' + forma).classList.add('activo');
+
+    const pal = paletas[forma];
+    const generadores = { corazon: corazonPos, saturno: saturnoPos, flor: florPos, fuegos: fuegosPos, esfera: esferaPos };
+    const gen = generadores[forma];
+
+    for (let i = 0; i < N; i++) {
+      const p = gen();
+      dest[i*3] = p[0]; dest[i*3+1] = p[1]; dest[i*3+2] = p[2];
+      const c = pal[Math.floor(Math.random()*pal.length)];
+      col[i*3] = c[0]; col[i*3+1] = c[1]; col[i*3+2] = c[2];
+    }
+    geo.attributes.color.needsUpdate = true;
+  }
+
+  setForma('corazon');
+
+  /* ── MOUSE ── */
+  let drag = false, lx = 0, ly = 0, rx = 0, ry = 0;
+  document.addEventListener('mousedown', e => { drag=true; lx=e.clientX; ly=e.clientY; });
+  document.addEventListener('mouseup',   () => drag=false);
+  document.addEventListener('mousemove', e => {
+    if (!drag) return;
+    ry += (e.clientX-lx)*0.01;
+    rx += (e.clientY-ly)*0.01;
+    lx=e.clientX; ly=e.clientY;
+  });
+  document.addEventListener('wheel', e => {
+    camera.position.z = Math.max(2, Math.min(10, camera.position.z + e.deltaY*0.01));
+  });
+
+  /* ── ANIMACIÓN ── */
+  let t = 0;
+  function animar() {
+    requestAnimationFrame(animar);
+    t += 0.01;
+    for (let i = 0; i < N; i++) {
+      pos[i*3]   += (dest[i*3]   - pos[i*3])   * vel[i];
+      pos[i*3+1] += (dest[i*3+1] - pos[i*3+1]) * vel[i];
+      pos[i*3+2] += (dest[i*3+2] - pos[i*3+2]) * vel[i];
+    }
+    geo.attributes.position.needsUpdate = true;
+    puntos.rotation.x = rx + Math.sin(t*0.2)*0.05;
+    puntos.rotation.y = ry + t*0.1;
+    renderer.render(scene, camera);
+  }
+  animar();
+
+</script>
+</body>
+</html>
