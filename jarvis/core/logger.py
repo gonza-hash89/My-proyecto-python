@@ -312,8 +312,8 @@ def init_logger(config=None):
     else:
         # Usar configuración proporcionada
         JarvisLogger.configure(
-            level=config.logging.level,
-            log_file=config.logging.file_path,
-            console_output=config.logging.console_output,
-            max_bytes=config.logging.max_file_size
+            level=config.logging['level'],
+            log_file=config.logging['file_path'],
+            console_output=config.logging['console_output'],
+            max_bytes=config.logging['max_file_size']
         )

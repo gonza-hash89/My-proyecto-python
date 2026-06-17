@@ -1,0 +1,43 @@
+# ============================================================================
+# CONFIGURACIÓN EJEMPLO PARA JARVIS
+# Copia este archivo a 'config.yaml' y ajusta según tu setup
+# ============================================================================
+
+logging:
+  level: INFO                    # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_path: logs/jarvis.log
+  console_output: true
+  max_file_size: 10485760        # 10 MB
+  backup_count: 5
+
+jarvis:
+  name: Jarvis                   # Nombre del asistente
+  language: es                   # Idioma (es, en, etc)
+  voice_gender: male             # male, female
+  voice_speed: 150               # 0-300 (palabras por minuto)
+  voice_volume: 1.0              # 0.0-1.0
+
+apis:
+  gemini_api_key: ""             # Obtén en: https://makersuite.google.com/app/apikey
+  timeout: 30                    # Segundos
+  retry_attempts: 3
+  retry_delay: 1                 # Segundos
+
+memory:
+  db_path: data/jarvis_memory.db
+  max_short_term: 100            # Conversaciones recientes a guardar
+  retention_days: 30             # Días antes de olvidar
+
+agents:
+  enabled:
+    - voice                      # Reconocimiento de voz
+    - dialog                     # Diálogo con Gemini
+    - system                     # Control del sistema
+    - web                        # Búsquedas en internet
+  timeout: 30                    # Timeout por agente
+  max_retries: 3
+
+system:
+  debug: false                   # Modo debug
+  data_dir: data
+  plugins_dir: plugins

@@ -1,191 +1,185 @@
 """
-config.py - Configuración centralizada de Jarvis
-Un único lugar para TODOS los settings
+config.py - Configuración centralizada para Jarvis
+Un único lugar donde TODOS los parámetros se configuran
 """
 
 import os
-from typing import Dict, Any
-from dataclasses import dataclass, field
-import json
 from pathlib import Path
+from typing import Optional, Dict, Any
+import yaml
+from dotenv import load_dotenv
 
 
-@dataclass
-class VoiceConfig:
-    """Configuración del módulo de voz"""
-    engine: str = "pyttsx3"
-    rate: int = 150  # Velocidad de habla
-    volume: float = 1.0  # Volumen (0-1)
-    voice_id: int = 1  # 0=Masculina, 1=Femenina
-    language: str = "es-ES"
-    timeout: int = 5  # Segundos para escuchar
-
-
-@dataclass
-class MemoryConfig:
-    """Configuración del módulo de memoria"""
-    enabled: bool = True
-    max_history: int = 100
-    storage_type: str = "json"  # json, sqlite, mongodb
-    storage_path: str = "data/memory.json"
-    context_window: int = 10  # Últimos N mensajes para contexto
-
-
-@dataclass
-class IntentConfig:
-    """Configuración del reconocedor de intenciones"""
-    provider: str = "gemini"  # gemini, openai, local
-    confidence_threshold: float = 0.5
-    use_fuzzy_matching: bool = True
-    api_key: str = ""  # Se lee de environment variable
-    model: str = "gemini-pro"
-
-
-@dataclass
-class DecisionConfig:
-    """Configuración del motor de decisiones"""
-    enabled: bool = True
-    strategy: str = "confidence_based"  # confidence_based, context_aware
-    max_retries: int = 3
-    timeout: int = 30
-
-
-@dataclass
-class PlanningConfig:
-    """Configuración del planificador de tareas"""
-    enabled: bool = True
-    max_subtasks: int = 10
-    timeout: int = 60
-
-
-@dataclass
-class LoggingConfig:
-    """Configuración del sistema de logging"""
-    level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
-    format: str = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
-    file_path: str = "logs/jarvis.log"
-    console_output: bool = True
-    max_file_size: int = 10 * 1024 * 1024  # 10 MB
-
-
-@dataclass
-class SystemConfig:
-    """Configuración general del sistema"""
-    name: str = "Jarvis"
-    version: str = "2.0.0"
-    debug: bool = False
-    auto_save: bool = True
-    save_interval: int = 300  # Segundos
-    max_concurrent_agents: int = 5
-
-
-@dataclass
-class AgentConfig:
-    """Configuración de agentes"""
-    enabled_agents: list = field(default_factory=lambda: [
-        "voice_agent",
-        "memory_agent",
-        "dialog_agent",
-        "system_agent",
-        "web_agent"
-    ])
-    agent_timeout: int = 30
-    retry_failed_agents: bool = True
-    max_agent_retries: int = 3
-
-
-@dataclass
 class Config:
-    """Configuración completa de Jarvis"""
+    """
+    Configuración centralizada con validación.
+    Carga desde YAML, .env y variables de entorno.
+    """
     
-    # Subsistemas
-    voice: VoiceConfig = field(default_factory=VoiceConfig)
-    memory: MemoryConfig = field(default_factory=MemoryConfig)
-    intent: IntentConfig = field(default_factory=IntentConfig)
-    decision: DecisionConfig = field(default_factory=DecisionConfig)
-    planning: PlanningConfig = field(default_factory=PlanningConfig)
-    logging: LoggingConfig = field(default_factory=LoggingConfig)
-    system: SystemConfig = field(default_factory=SystemConfig)
-    agent: AgentConfig = field(default_factory=AgentConfig)
-    
-    # Rutas importantes
-    base_dir: str = field(default_factory=lambda: str(Path(__file__).parent.parent))
-    data_dir: str = field(default_factory=lambda: "data")
-    logs_dir: str = field(default_factory=lambda: "logs")
-    
-    def __post_init__(self):
-        """Crear directorios necesarios después de inicializar"""
-        self._create_directories()
-        self._load_env_variables()
-    
-    def _create_directories(self):
-        """Crea directorios necesarios si no existen"""
-        dirs = [self.data_dir, self.logs_dir, "cache"]
-        for dir_path in dirs:
-            Path(dir_path).mkdir(exist_ok=True)
-    
-    def _load_env_variables(self):
-        """Carga variables de environment"""
-        # Intent API Key
-        if gemini_key := os.getenv("GEMINI_API_KEY"):
-            self.intent.api_key = gemini_key
+    def __init__(self, config_file: str = "config.yaml"):
+        """
+        Inicializa la configuración.
         
-        # Debug mode
-        if debug := os.getenv("JARVIS_DEBUG"):
-            self.system.debug = debug.lower() == "true"
+        Args:
+            config_file: Ruta al archivo de configuración YAML
+        """
+        # Cargar variables de entorno
+        load_dotenv()
         
-        # Logging level
-        if log_level := os.getenv("JARVIS_LOG_LEVEL"):
-            self.logging.level = log_level
+        self.config_file = Path(config_file)
+        self.config = {}
+        
+        # Cargar configuración YAML si existe
+        if self.config_file.exists():
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f) or {}
+        
+        # Inicializar secciones por defecto
+        self._init_defaults()
+        self._validate()
+    
+    def _init_defaults(self):
+        """Inicializa valores por defecto para todas las secciones"""
+        
+        # Logging
+        if 'logging' not in self.config:
+            self.config['logging'] = {}
+        self.logging = self.config['logging']
+        self.logging.setdefault('level', 'INFO')
+        self.logging.setdefault('file_path', 'logs/jarvis.log')
+        self.logging.setdefault('console_output', True)
+        self.logging.setdefault('max_file_size', 10 * 1024 * 1024)  # 10 MB
+        self.logging.setdefault('backup_count', 5)
+        
+        # Jarvis
+        if 'jarvis' not in self.config:
+            self.config['jarvis'] = {}
+        self.jarvis = self.config['jarvis']
+        self.jarvis.setdefault('name', os.getenv('JARVIS_NAME', 'Jarvis'))
+        self.jarvis.setdefault('language', 'es')
+        self.jarvis.setdefault('voice_gender', 'male')  # male, female
+        self.jarvis.setdefault('voice_speed', 150)
+        self.jarvis.setdefault('voice_volume', 1.0)
+        
+        # APIs
+        if 'apis' not in self.config:
+            self.config['apis'] = {}
+        self.apis = self.config['apis']
+        self.apis.setdefault('gemini_api_key', os.getenv('GEMINI_API_KEY', ''))
+        self.apis.setdefault('timeout', 30)
+        self.apis.setdefault('retry_attempts', 3)
+        self.apis.setdefault('retry_delay', 1)  # segundos
+        
+        # Memory
+        if 'memory' not in self.config:
+            self.config['memory'] = {}
+        self.memory = self.config['memory']
+        self.memory.setdefault('db_path', 'data/jarvis_memory.db')
+        self.memory.setdefault('max_short_term', 100)  # conversaciones recientes
+        self.memory.setdefault('retention_days', 30)
+        
+        # Agentes
+        if 'agents' not in self.config:
+            self.config['agents'] = {}
+        self.agents = self.config['agents']
+        self.agents.setdefault('enabled', ['voice', 'dialog', 'system', 'web'])
+        self.agents.setdefault('timeout', 30)
+        self.agents.setdefault('max_retries', 3)
+        
+        # Sistema
+        if 'system' not in self.config:
+            self.config['system'] = {}
+        self.system = self.config['system']
+        self.system.setdefault('debug', os.getenv('DEBUG', 'False').lower() == 'true')
+        self.system.setdefault('data_dir', 'data')
+        self.system.setdefault('plugins_dir', 'plugins')
+    
+    def _validate(self):
+        """Valida la configuración al cargar"""
+        # Validar que las claves requeridas existan
+        required_keys = ['logging', 'jarvis', 'apis', 'memory', 'agents']
+        for key in required_keys:
+            if key not in self.config:
+                raise ValueError(f"Configuración faltante: {key}")
+        
+        # Validar API key si es necesaria
+        if not self.apis.get('gemini_api_key'):
+            print("⚠️  ADVERTENCIA: GEMINI_API_KEY no configurada. Algunas funciones no funcionarán.")
+        
+        # Crear directorios necesarios
+        Path(self.logging['file_path']).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.memory['db_path']).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.system['data_dir']).mkdir(parents=True, exist_ok=True)
+        Path(self.system['plugins_dir']).mkdir(parents=True, exist_ok=True)
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Obtiene un valor de configuración con notación de punto.
+        
+        Ejemplo:
+            config.get('apis.gemini_api_key')
+            config.get('jarvis.name')
+        """
+        keys = key.split('.')
+        value = self.config
+        
+        for k in keys:
+            if isinstance(value, dict):
+                value = value.get(k)
+                if value is None:
+                    return default
+            else:
+                return default
+        
+        return value
+    
+    def set(self, key: str, value: Any):
+        """
+        Establece un valor de configuración con notación de punto.
+        
+        Ejemplo:
+            config.set('jarvis.name', 'JARVIS')
+        """
+        keys = key.split('.')
+        config = self.config
+        
+        for k in keys[:-1]:
+            if k not in config:
+                config[k] = {}
+            config = config[k]
+        
+        config[keys[-1]] = value
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convierte la configuración a diccionario"""
-        return {
-            "voice": self.voice.__dict__,
-            "memory": self.memory.__dict__,
-            "intent": self.intent.__dict__,
-            "decision": self.decision.__dict__,
-            "planning": self.planning.__dict__,
-            "logging": self.logging.__dict__,
-            "system": self.system.__dict__,
-            "agent": self.agent.__dict__,
-        }
+        """Retorna la configuración como diccionario"""
+        return self.config.copy()
     
-    def save_to_file(self, filepath: str = "config.json"):
-        """Guarda la configuración en un archivo JSON"""
-        with open(filepath, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
-    
-    @classmethod
-    def load_from_file(cls, filepath: str = "config.json") -> "Config":
-        """Carga configuración desde archivo JSON"""
-        if not Path(filepath).exists():
-            return cls()
-        
-        with open(filepath, "r") as f:
-            data = json.load(f)
-        
-        config = cls()
-        # Aquí podrías actualizar config con los datos del archivo
-        return config
-    
-    def __repr__(self) -> str:
-        return f"Config(system={self.system.name} v{self.system.version})"
+    def save_to_yaml(self, filepath: str):
+        """Guarda la configuración a un archivo YAML"""
+        with open(filepath, 'w', encoding='utf-8') as f:
+            yaml.dump(self.config, f, allow_unicode=True, default_flow_style=False)
 
 
 # Instancia global de configuración
-_global_config: Config = None
+_global_config: Optional[Config] = None
 
 
-def get_config() -> Config:
-    """Obtiene la instancia global de configuración"""
+def get_config(config_file: str = "config.yaml") -> Config:
+    """
+    Obtiene la instancia global de configuración.
+    La primera llamada inicializa, las siguientes retornan la instancia.
+    
+    Ejemplo:
+        config = get_config()
+        api_key = config.apis['gemini_api_key']
+    """
     global _global_config
     if _global_config is None:
-        _global_config = Config()
+        _global_config = Config(config_file)
     return _global_config
 
 
-def set_config(config: Config) -> None:
-    """Establece la configuración global"""
+def reset_config():
+    """Reinicia la configuración global (útil para pruebas)"""
     global _global_config
-    _global_config = config
+    _global_config = None
