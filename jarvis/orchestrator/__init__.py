@@ -1,13 +1,15 @@
-"""
-orchestrator/ - Módulo de integración de Jarvis
-Semana 3: Conecta memoria + intención + decisión
-"""
-from .events import EventBus, JarvisEvent, EventPriority, EventData, get_event_bus, init_event_bus
-from .errors import ErrorHandler, ErrorSeverity, RecoveryStrategy, ErrorContext, get_error_handler
+"""Paquete de orquestador de Jarvis."""
+
+from .events import Event, make_event
+from .errors import OrchestratorError, EventNotFoundError, ListenerError
+from .orchestrator import Orchestrator, default_orchestrator
 
 __all__ = [
-    "EventBus", "JarvisEvent", "EventPriority", "EventData",
-    "get_event_bus", "init_event_bus",
-    "ErrorHandler", "ErrorSeverity", "RecoveryStrategy", "ErrorContext",
-    "get_error_handler"
+    "Event",
+    "make_event",
+    "OrchestratorError",
+    "EventNotFoundError",
+    "ListenerError",
+    "Orchestrator",
+    "default_orchestrator",
 ]
