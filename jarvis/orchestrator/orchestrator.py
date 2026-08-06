@@ -1,38 +1,935 @@
-"""Orquestador ligero para emitir y escuchar eventos.
-
-Este archivo proporciona una implementación mínima en memoria que es
-suficiente para pruebas y para integrarse con el módulo de memoria.
 """
-from typing import Callable, Dict, List
-from .events import Event
-from .errors import ListenerError
-import logging
+orchestrator.py - Orquestador central de Jarvis
+
+Jarvis NO hace todo: COORDINA todo. Este es el director de la orquesta.
+
+Responsabilidades:
+- Inicializar todos los módulos (voz, memoria, intención, decisión)
+- Coordinar el flujo completo: entrada → memoria → intención → decisión → acción
+- Publicar eventos en el EventBus para trazabilidad total
+- Manejar errores con estrategias de recuperación (ErrorHandler)
+- Mantener el estado de Jarvis (IDLE → LISTENING → THINKING → SPEAKING)
+- Ejecutar 11 acciones: hora, fecha, música, YouTube, Wikipedia,
+  abrir apps, captura, chistes, control del sistema, nombre y salir
+
+Filosofía:
+- "Mejor lento y bien, que rápido y mal"
+- "La arquitectura es más importante que el código"
+- Cada componente se comunica por EVENTOS, no por llamadas acopladas
+"""
+
+import asyncio
+import concurrent.futures
+import os
+import random
+import sys
+import time
+import webbrowser as wb
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, Optional
+
+# Configurar path para importar los paquetes de jarvis
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.config import get_config
+from core.logger import JarvisLogger, AgentLogger, init_logger
+from core.intent_recognizer import IntentRecognizer, Intent
+from brain.memory import MemoryManager
+from brain.decision import DecisionEngine, DecisionContext, Intent as DecisionIntent
+from orchestrator.events import (
+    Event,
+    make_event,
+    EventBus,
+    JarvisEvent,
+    EventPriority,
+    get_event_bus,
+    init_event_bus,
+)
+from orchestrator.errors import (
+    ErrorSeverity,
+    ErrorHandler,
+    RecoveryStrategy,
+    get_error_handler,
+)
+
+# ==================== LIBRERÍAS OPCIONALES (import seguras) ====================
+# Jarvis debe poder iniciarse aunque falte una librería periférica.
+# Cada agente/acción verifica su disponibilidad antes de usarla.
+
+try:
+    import pyttsx3
+    _VOICE_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    pyttsx3 = None
+    _VOICE_AVAILABLE = False
+
+try:
+    import speech_recognition as sr
+    _SR_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    sr = None
+    _SR_AVAILABLE = False
+
+try:
+    import wikipedia
+    _WIKIPEDIA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    wikipedia = None
+    _WIKIPEDIA_AVAILABLE = False
+
+try:
+    import pyautogui
+    _PYAUTOGUI_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    pyautogui = None
+    _PYAUTOGUI_AVAILABLE = False
+
+try:
+    import pyjokes
+    _PYJOKES_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    pyjokes = None
+    _PYJOKES_AVAILABLE = False
 
 
-logger = logging.getLogger("Jarvis.orchestrator")
+# ==================== ESTADOS DE JARVIS ====================
 
+class JarvisState(Enum):
+    """Estados de la máquina de estados de Jarvis.
+
+    Mapeo con la esfera visual 3D:
+        IDLE (azul) → LISTENING (verde) → THINKING (amarillo) → SPEAKING (azul brillante)
+    """
+    IDLE = "idle"                # Esperando input
+    LISTENING = "listening"      # Escuchando al usuario (micrófono)
+    THINKING = "thinking"        # Procesando intención y tomando decisión
+    SPEAKING = "speaking"        # Respondiendo con voz
+    ERROR = "error"              # Ocurrió un error recuperable
+    STOPPING = "stopping"        # Apagando sistema
+
+
+# ==================== ORCHESTRATOR ====================
 
 class Orchestrator:
+    """Director central de Jarvis.
+
+    Conecta todos los subsistemas sin acoplarlos entre sí:
+    el EventBus es el sistema nervioso, el ErrorHandler el sistema inmune,
+    la memoria el almacén, el intent recognizer el oído del cerebro
+    y el decision engine el criterio.
+    """
+
     def __init__(self):
-        # listeners: event_name -> list of callables
-        self._listeners: Dict[str, List[Callable[[Event], None]]] = {}
+        """Inicializa configuración, logging, voz y todos los módulos."""
+        self.config = get_config()
 
-    def register_listener(self, event_name: str, callback: Callable[[Event], None]):
-        self._listeners.setdefault(event_name, []).append(callback)
-        logger.debug("Listener registrado para %s: %s", event_name, callback)
+        # Logging centralizado
+        init_logger(self.config)
+        self.logger = AgentLogger("orchestrator", agent_id="orq_001")
 
-    def emit(self, event: Event):
-        listeners = self._listeners.get(event.name, [])
-        if not listeners:
-            logger.debug("Ningún listener para evento: %s", event.name)
+        # Estado del sistema
+        self.state = JarvisState.IDLE
+        self.is_running = True
+        self.modules_ready = False
+
+        # Voz
+        self.engine = None
+        self._voice_available = _VOICE_AVAILABLE
+        self._sr_available = _SR_AVAILABLE
+
+        # Subsistemas (se inicializan después)
+        self.event_bus: Optional[EventBus] = None
+        self.error_handler: Optional[ErrorHandler] = None
+        self.memory: Optional[MemoryManager] = None
+        self.intent_recognizer: Optional[IntentRecognizer] = None
+        self.decision_engine: Optional[DecisionEngine] = None
+        self.decision_context: Optional[DecisionContext] = None
+
+        # Arranque completo
+        self._init_voice_engine()
+        self._init_modules()
+        self._subscribe_events()
+
+        self.logger.info("Orchestrator inicializado correctamente")
+
+    # ==================== INICIALIZACIÓN ====================
+
+    def _init_voice_engine(self) -> None:
+        """Inicializa el motor de voz (pyttsx3) con la configuración."""
+        if not _VOICE_AVAILABLE:
+            self.logger.warning("pyttsx3 no instalado. Jarvis correrá en modo texto.")
+            self._voice_available = False
+            self.engine = None
             return
-        for cb in listeners:
+
+        try:
+            self.engine = pyttsx3.init()
+            voices = self.engine.getProperty("voices")
+
+            # Seleccionar voz según configuración (0=masculina, 1=femenina)
+            voice_id = self.config.voice.voice_id
+            if voices and 0 <= voice_id < len(voices):
+                self.engine.setProperty("voice", voices[voice_id].id)
+
+            self.engine.setProperty("rate", self.config.voice.rate)
+            self.engine.setProperty("volume", self.config.voice.volume)
+            self._voice_available = True
+            self.logger.info(f"Motor de voz inicializado (rate={self.config.voice.rate})")
+        except Exception as e:
+            self._voice_available = False
+            self.engine = None
+            self.logger.error(f"No se pudo inicializar el motor de voz: {e}")
+
+    def _init_modules(self) -> None:
+        """Inicializa el EventBus, ErrorHandler, Memoria, Intención y Decisión."""
+        # 1. EventBus: todos los módulos se comunican por eventos
+        init_event_bus()
+        self.event_bus = get_event_bus()
+        self.logger.info("EventBus inicializado")
+
+        # 2. ErrorHandler: resiliencia ante fallos
+        self.error_handler = get_error_handler()
+        self.logger.info("ErrorHandler inicializado")
+
+        # 3. Memoria: RAM + SQLite
+        db_path = os.path.join(
+            self.config.base_dir, self.config.data_dir, "jarvis_memory.db"
+        )
+        self.memory = MemoryManager(db_path=db_path)
+        self.logger.info("MemoryManager inicializado")
+
+        # 4. Reconocedor de intenciones
+        self.intent_recognizer = IntentRecognizer()
+        self.logger.info(
+            f"IntentRecognizer inicializado ({len(self.intent_recognizer.get_available_intents())} intenciones)"
+        )
+
+        # 5. Motor de decisiones
+        self.decision_engine = DecisionEngine()
+        self.decision_context = DecisionContext(
+            user_id="local_user",
+            session_id=f"session_{int(time.time())}",
+        )
+        self.logger.info("DecisionEngine inicializado")
+
+        self.modules_ready = True
+
+    def _subscribe_events(self) -> None:
+        """Escucha los eventos importantes para logging y observabilidad."""
+        self.event_bus.subscribe(JarvisEvent.SYSTEM_STARTED.value, self._on_system_event)
+        self.event_bus.subscribe(JarvisEvent.SYSTEM_READY.value, self._on_system_event)
+        self.event_bus.subscribe(JarvisEvent.SYSTEM_STOPPING.value, self._on_system_event)
+        self.event_bus.subscribe(JarvisEvent.STATE_CHANGED.value, self._on_state_event)
+        self.event_bus.subscribe(JarvisEvent.ERROR_OCCURRED.value, self._on_error_event)
+        self.event_bus.subscribe(JarvisEvent.ERROR_CRITICAL.value, self._on_error_event)
+        self.logger.debug("Suscripciones a eventos registradas")
+
+    # ==================== EVENTOS ====================
+
+    def _publish(
+        self,
+        event_name: JarvisEvent,
+        payload: Optional[Dict[str, Any]] = None,
+        priority: EventPriority = EventPriority.NORMAL,
+    ) -> None:
+        """Publica un evento tipado en el EventBus."""
+        if self.event_bus:
+            self.event_bus.publish(
+                make_event(event_name.value, payload or {}),
+                priority=priority,
+            )
+
+    def _on_system_event(self, event: Event) -> None:
+        """Registra eventos de ciclo de vida del sistema."""
+        self.logger.debug(f"Evento de sistema: {event.name}")
+
+    def _on_state_event(self, event: Event) -> None:
+        """Registra cambios de estado de Jarvis."""
+        self.logger.debug(
+            f"Cambio de estado: {event.payload.get('from')} → {event.payload.get('to')}"
+        )
+
+    def _on_error_event(self, event: Event) -> None:
+        """Registra errores publicados por el ErrorHandler."""
+        self.logger.warning(f"Error registrado: {event.payload.get('message')}")
+
+    # ==================== ESTADO ====================
+
+    def set_state(self, state: JarvisState) -> None:
+        """Transiciona la máquina de estados de Jarvis."""
+        if self.state == state:
+            return
+        previous = self.state
+        self.state = state
+        self.logger.debug(f"Estado: {previous.value} → {state.value}")
+        self._publish(
+            JarvisEvent.STATE_CHANGED,
+            {"from": previous.value, "to": state.value},
+            priority=EventPriority.LOW,
+        )
+
+    # ==================== UTILIDADES ASYNC ====================
+
+    @staticmethod
+    def _run_async(coro) -> Any:
+        """Ejecuta una corrutina de memoria de forma segura.
+
+        La memoria usa async I/O (run_in_executor). Como el loop principal
+        de Jarvis es síncrono, resolvemos la corrutina aquí sin bloquear
+        la arquitectura.
+        """
+        try:
+            return asyncio.run(coro)
+        except RuntimeError:
+            # Ya existe un loop corriendo: ejecutar en un hilo separado
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result()
+
+    # ==================== LOOP PRINCIPAL ====================
+
+    def run(self) -> None:
+        """Loop principal: saluda, escucha, procesa y responde hasta detenerse."""
+        self.logger.info("Jarvis iniciando...")
+        self._publish(JarvisEvent.SYSTEM_STARTED, {"version": self.config.system.version})
+
+        module_list = self._get_module_list()
+        self._publish(JarvisEvent.SYSTEM_READY, {"modules": module_list})
+
+        self._publish(
+            JarvisEvent.SESSION_STARTED,
+            {"session": self.decision_context.session_id},
+        )
+
+        self._wishme()
+
+        while self.is_running:
             try:
-                cb(event)
+                query = self._listen()
+                if query:
+                    self.process_input(query)
+            except KeyboardInterrupt:
+                self.logger.info("Interrupción del usuario detectada")
+                break
             except Exception as e:
-                logger.exception("Error en listener para evento %s: %s", event.name, e)
-                raise ListenerError(str(e))
+                self.error_handler.handle(
+                    exception=e,
+                    operation="main_loop",
+                    severity=ErrorSeverity.ERROR,
+                    strategy=RecoveryStrategy.SKIP,
+                )
+
+        self.shutdown()
+
+    def shutdown(self) -> None:
+        """Apaga Jarvis de forma ordenada, cerrando sesión y bus."""
+        self._publish(
+            JarvisEvent.SESSION_ENDED,
+            {"session": self.decision_context.session_id},
+        )
+        self._publish(JarvisEvent.SYSTEM_STOPPING, {})
+        self.stop()
+        if self.event_bus:
+            self.event_bus.stop()
+        self.logger.info("Jarvis apagado correctamente")
+
+    def stop(self) -> None:
+        """Detiene Jarvis de forma segura (bandera + motor de voz)."""
+        self.is_running = False
+        self.set_state(JarvisState.STOPPING)
+        if self._voice_available and self.engine is not None:
+            try:
+                self.engine.stop()
+            except Exception:
+                pass
+        self.logger.info("Orchestrator detenido")
+
+    # ==================== ENTRADA Y SALIDA ====================
+
+    def speak(self, text: str) -> None:
+        """Hace que Jarvis hable con pyttsx3 (o imprime en modo texto)."""
+        if not text:
+            return
+        self.set_state(JarvisState.SPEAKING)
+        self.logger.info(f"[Jarvis] {text}")
+
+        if self._voice_available and self.engine is not None:
+            try:
+                self.engine.say(text)
+                self.engine.runAndWait()
+            except Exception as e:
+                self.error_handler.handle(
+                    exception=e,
+                    operation="speak",
+                    severity=ErrorSeverity.ERROR,
+                    strategy=RecoveryStrategy.SKIP,
+                )
+        else:
+            print(f"[{self._load_name()}] {text}")
+
+        self.set_state(JarvisState.IDLE)
+
+    def _listen(self) -> Optional[str]:
+        """
+        Escucha al usuario por micrófono (español).
+
+        Si el reconocimiento de voz no está disponible, usa entrada de texto
+        para que Jarvis siga siendo funcional.
+        """
+        if not self._sr_available:
+            try:
+                text = input("👤 Tú: ")
+                return text.lower().strip() or None
+            except (EOFError, KeyboardInterrupt):
+                return None
+
+        self.set_state(JarvisState.LISTENING)
+        recognizer = sr.Recognizer()
+
+        try:
+            with sr.Microphone() as source:
+                print("Escuchando...")
+                recognizer.pause_threshold = 1
+                recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                try:
+                    audio = recognizer.listen(source, timeout=self.config.voice.timeout)
+                except sr.WaitTimeoutError:
+                    self.speak("Tiempo agotado. Por favor intente de nuevo.")
+                    return None
+
+            print("Reconociendo...")
+            query = recognizer.recognize_google(audio, language=self.config.voice.language)
+            self.logger.info(f"Reconocido: {query}")
+            return query.lower().strip()
+
+        except sr.UnknownValueError:
+            self.speak("Lo siento, no entendí eso.")
+            return None
+        except sr.RequestError:
+            self.speak("El servicio de reconocimiento de voz no está disponible.")
+            return None
+        except Exception as e:
+            self.error_handler.handle(
+                exception=e,
+                operation="listen",
+                severity=ErrorSeverity.ERROR,
+                strategy=RecoveryStrategy.SKIP,
+            )
+            return None
+        finally:
+            self.set_state(JarvisState.IDLE)
+
+    def _wishme(self) -> None:
+        """Saludo inicial según la hora del día."""
+        self.speak("Bienvenido de nuevo, señor.")
+
+        hour = datetime.now().hour
+        if 4 <= hour < 12:
+            self.speak("Buenos días.")
+        elif 12 <= hour < 16:
+            self.speak("Buenas tardes.")
+        elif 16 <= hour < 24:
+            self.speak("Buenas noches.")
+        else:
+            self.speak("Buenas noches, hasta mañana.")
+
+        name = self._load_name()
+        self.speak(f"{name} a su servicio. ¿En qué le puedo ayudar?")
+
+    # ==================== NOMBRE DEL ASISTENTE ====================
+
+    def _name_file(self) -> str:
+        """Ruta del archivo donde se guarda el nombre del asistente."""
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "assistant_name.txt",
+        )
+
+    def _load_name(self) -> str:
+        """Carga el nombre del asistente desde el archivo."""
+        try:
+            with open(self._name_file(), "r", encoding="utf-8") as file:
+                name = file.read().strip()
+            return name or "Jarvis"
+        except (FileNotFoundError, OSError):
+            return "Jarvis"
+
+    def _save_name(self, name: str) -> None:
+        """Guarda el nombre del asistente en el archivo."""
+        with open(self._name_file(), "w", encoding="utf-8") as file:
+            file.write(name.strip())
+
+    # ==================== FLUJO PRINCIPAL DE PROCESAMIENTO ====================
+
+    def process_input(self, user_input: str) -> Optional[str]:
+        """
+        Flujo completo de procesamiento:
+            memoria → intención → decisión → acción → respuesta
+
+        Args:
+            user_input: Texto que dijo el usuario
+
+        Returns:
+            La respuesta generada (o None si no se pudo procesar)
+        """
+        if not user_input or not user_input.strip():
+            return None
+        user_input = user_input.strip()
+
+        self.logger.info(f"Procesando input: {user_input}")
+        self._publish(JarvisEvent.USER_INPUT_RECEIVED, {"input": user_input})
+        self.set_state(JarvisState.THINKING)
+
+        # 1. Guardar en memoria de contexto
+        self._run_async(self.memory.set_context("last_input", user_input))
+
+        # 2. Reconocer intención
+        intent = self._recognize_intent(user_input)
+
+        # 3. Tomar decisión (cerebro estratégico)
+        if intent is not None:
+            decision = self.decision_engine.decide([intent])
+            if decision is None:
+                self.logger.warning(
+                    f"Decisión rechazada (confianza bajo umbral): {intent.name}"
+                )
+
+        # 4. Ejecutar la acción correspondiente
+        response: Optional[str] = None
+        if intent is not None:
+            response = self._execute_intent(intent, user_input)
+        else:
+            response = "Lo siento, no entendí eso."
+            self.speak(response)
+
+        # 5. Guardar la conversación en memoria persistente
+        self._run_async(
+            self.memory.save_conversation(
+                user_message=user_input,
+                agent_response=response or "",
+                intent=intent.name if intent else "unknown",
+            )
+        )
+
+        self._publish(JarvisEvent.USER_INPUT_PROCESSED, {
+            "input": user_input,
+            "intent": intent.name if intent else "unknown",
+            "response": response,
+        })
+        self.set_state(JarvisState.IDLE)
+        return response
+
+    def _recognize_intent(self, user_input: str) -> Optional[DecisionIntent]:
+        """
+        Reconoce la intención del usuario usando IntentRecognizer.
+
+        Returns:
+            Intent del motor de decisiones, o None si no se reconoció.
+        """
+        self._publish(JarvisEvent.INTENT_RECOGNITION_STARTED, {"input": user_input})
+
+        try:
+            result = self.intent_recognizer.recognize(user_input)
+
+            if result.name == "unknown":
+                self.logger.warning(f"Intención no reconocida: {user_input}")
+                self._publish(
+                    JarvisEvent.INTENT_RECOGNIZED,
+                    {"intent": "unknown", "confidence": 0.0},
+                )
+                return None
+
+            intent = DecisionIntent(
+                id=f"intent_{int(time.time() * 1000)}",
+                name=result.name,
+                confidence=result.confidence,
+                parameters=result.entities,
+                raw_text=user_input,
+            )
+            self.logger.info(
+                f"Intención: {intent.name} ({intent.confidence * 100:.0f}%)"
+            )
+            self._publish(
+                JarvisEvent.INTENT_RECOGNIZED,
+                {"intent": intent.name, "confidence": intent.confidence},
+            )
+            return intent
+
+        except Exception as e:
+            self.error_handler.handle(
+                exception=e,
+                operation="intent_recognition",
+                severity=ErrorSeverity.ERROR,
+                strategy=RecoveryStrategy.SKIP,
+            )
+            return None
+
+    def _execute_intent(
+        self,
+        intent: DecisionIntent,
+        user_input: str,
+    ) -> Optional[str]:
+        """
+        Ejecuta la acción correspondiente a la intención reconocida.
+
+        Returns:
+            La respuesta/resultado de la acción, o None si falló.
+        """
+        self._publish(
+            JarvisEvent.ACTION_EXECUTING,
+            {"intent": intent.name, "input": user_input},
+        )
+
+        actions = {
+            "time_query": self._action_time,
+            "date_query": self._action_date,
+            "play_music": self._action_play_music,
+            "watch_videos": self._action_youtube,
+            "search_info": self._action_wikipedia,
+            "open_application": self._action_open_app,
+            "take_screenshot": self._action_screenshot,
+            "tell_joke": self._action_joke,
+            "system_control": self._action_system_control,
+            "change_name": self._action_change_name,
+            "exit": self._action_exit,
+        }
+
+        handler = actions.get(intent.name)
+        if handler is None:
+            message = f"Aún no tengo implementada la acción '{intent.name}'."
+            self.logger.warning(message)
+            self.speak(message)
+            self._publish(
+                JarvisEvent.ACTION_COMPLETED,
+                {"intent": intent.name, "skipped": True},
+            )
+            return message
+
+        try:
+            result = handler(user_input, intent)
+            self._publish(
+                JarvisEvent.ACTION_COMPLETED,
+                {"intent": intent.name, "result": result},
+            )
+            return result
+        except Exception as e:
+            self._publish(
+                JarvisEvent.ACTION_FAILED,
+                {"intent": intent.name, "error": str(e)},
+            )
+            self.error_handler.handle(
+                exception=e,
+                operation=f"action_{intent.name}",
+                severity=ErrorSeverity.ERROR,
+                strategy=RecoveryStrategy.SKIP,
+            )
+            return None
+
+    # ==================== ACCIONES (11) ====================
+
+    def _action_time(self, user_input: str, intent: DecisionIntent) -> str:
+        """Dice la hora actual."""
+        now = datetime.now().strftime("%I:%M %p")
+        text = f"La hora actual es {now}"
+        self.speak(text)
+        return text
+
+    def _action_date(self, user_input: str, intent: DecisionIntent) -> str:
+        """Dice la fecha actual."""
+        now = datetime.now()
+        text = f"La fecha actual es {now.day} de {now.strftime('%B')} de {now.year}"
+        self.speak(text)
+        return text
+
+    def _action_play_music(self, user_input: str, intent: DecisionIntent) -> str:
+        """Reproduce música de la carpeta Música del usuario."""
+        music_dir = os.path.expanduser("~\\Music")
+        if not os.path.isdir(music_dir):
+            text = "No encontré la carpeta de música."
+            self.speak(text)
+            return text
+
+        songs = [
+            f for f in os.listdir(music_dir)
+            if f.lower().endswith((".mp3", ".wav", ".flac", ".m4a"))
+        ]
+
+        # Filtrar por género si el usuario lo pidió
+        genre = intent.parameters.get("genre")
+        if genre:
+            songs = [s for s in songs if genre.lower() in s.lower()]
+
+        if not songs:
+            text = "No se encontró ninguna canción."
+            self.speak(text)
+            return text
+
+        song = random.choice(songs)
+        os.startfile(os.path.join(music_dir, song))
+        text = f"Reproduciendo {song}."
+        self.speak(text)
+        return text
+
+    def _action_youtube(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre YouTube en el navegador."""
+        wb.open("https://www.youtube.com")
+        text = "Abriendo YouTube."
+        self.speak(text)
+        return text
+
+    def _action_wikipedia(self, user_input: str, intent: DecisionIntent) -> str:
+        """Busca información en Wikipedia."""
+        if not _WIKIPEDIA_AVAILABLE:
+            text = "El módulo de Wikipedia no está disponible."
+            self.speak(text)
+            return text
+
+        query = intent.parameters.get("topic") or self._strip_query(
+            user_input,
+            ["wikipedia", "busca", "buscar", "búscame", "información", "sobre", "de"],
+        )
+        if not query:
+            self.speak("¿Sobre qué tema quieres que busque?")
+            return "Pregunta por tema"
+
+        try:
+            wikipedia.set_lang("es")
+            summary = wikipedia.summary(query, sentences=2)
+            self.speak(summary)
+            return summary
+        except wikipedia.exceptions.DisambiguationError:
+            text = "Hay varios resultados. Por favor sea más específico."
+            self.speak(text)
+            return text
+        except Exception:
+            text = "No encontré nada en Wikipedia."
+            self.speak(text)
+            return text
+
+    def _action_open_app(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre una aplicación (web o local)."""
+        web_apps = {
+            "google": "https://www.google.com",
+            "youtube": "https://www.youtube.com",
+            "gmail": "https://mail.google.com",
+            "github": "https://github.com",
+            "spotify": "https://open.spotify.com",
+            "netflix": "https://www.netflix.com",
+            "twitch": "https://www.twitch.tv",
+            "twitter": "https://twitter.com",
+            "wikipedia": "https://es.wikipedia.org",
+            "maps": "https://maps.google.com",
+            "chatgpt": "https://chat.openai.com",
+            "whatsapp": "https://web.whatsapp.com",
+        }
+        local_apps = {
+            "notepad": "notepad",
+            "bloc de notas": "notepad",
+            "calculadora": "calc",
+            "calc": "calc",
+            "explorador": "explorer",
+            "cmd": "cmd",
+            "powershell": "powershell",
+            "paint": "mspaint",
+            "administrador de tareas": "taskmgr",
+        }
+
+        app = intent.parameters.get("application") or self._strip_query(
+            user_input,
+            ["abre el", "abre la", "abre", "abrir", "lanza", "ejecuta", "el", "la"],
+        )
+        if not app:
+            self.speak("¿Qué aplicación quieres que abra?")
+            return "Pregunta por aplicación"
+
+        app_lower = app.lower()
+
+        if app_lower in web_apps:
+            wb.open(web_apps[app_lower])
+            text = f"Abriendo {app_lower}."
+            self.speak(text)
+            return text
+
+        if app_lower in local_apps:
+            os.startfile(local_apps[app_lower])
+            text = f"Abriendo {app_lower}."
+            self.speak(text)
+            return text
+
+        try:
+            os.startfile(app_lower)
+            text = f"Abriendo {app_lower}."
+            self.speak(text)
+            return text
+        except Exception:
+            text = f"No encontré la aplicación {app_lower}."
+            self.speak(text)
+            return text
+
+    def _action_screenshot(self, user_input: str, intent: DecisionIntent) -> Optional[str]:
+        """Toma una captura de pantalla y la guarda en Pictures."""
+        if not _PYAUTOGUI_AVAILABLE:
+            text = "El módulo de captura de pantalla no está disponible."
+            self.speak(text)
+            return text
+
+        try:
+            img = pyautogui.screenshot()
+            file_name = f"captura_{int(time.time())}.png"
+            path = os.path.join(os.path.expanduser("~"), "Pictures", file_name)
+            img.save(path)
+            text = f"Captura guardada en {path}."
+            self.speak(text)
+            return text
+        except Exception as e:
+            self.error_handler.handle(
+                exception=e,
+                operation="screenshot",
+                severity=ErrorSeverity.ERROR,
+                strategy=RecoveryStrategy.SKIP,
+            )
+            return None
+
+    def _action_joke(self, user_input: str, intent: DecisionIntent) -> Optional[str]:
+        """Cuenta un chiste en español."""
+        if not _PYJOKES_AVAILABLE:
+            text = "El módulo de chistes no está disponible."
+            self.speak(text)
+            return text
+
+        try:
+            joke = pyjokes.get_joke(language="es")
+            self.speak(joke)
+            return joke
+        except Exception as e:
+            self.error_handler.handle(
+                exception=e,
+                operation="joke",
+                severity=ErrorSeverity.ERROR,
+                strategy=RecoveryStrategy.SKIP,
+            )
+            return None
+
+    def _action_system_control(self, user_input: str, intent: DecisionIntent) -> str:
+        """Controla el sistema: apagar, reiniciar, bloquear o suspender."""
+        action = intent.parameters.get("action", "apagar")
+
+        if "reiniciar" in user_input or "reinicia" in user_input or action == "reiniciar":
+            self.speak("Reiniciando el sistema. ¡Hasta pronto!")
+            os.system("shutdown /r /f /t 1")
+            return "Reiniciando sistema"
+
+        if "bloquear" in user_input or "bloquea" in user_input or action == "bloquear":
+            self.speak("Bloqueando el equipo.")
+            os.system("rundll32 user32.dll,LockWorkStation")
+            return "Bloqueando equipo"
+
+        if "dormir" in user_input or "suspender" in user_input or action == "dormir":
+            self.speak("Poniendo el equipo en suspensión.")
+            os.system("rundll32 powrprof.dll,SetSuspendState 0,1,0")
+            return "Equipo en suspensión"
+
+        self.speak("Apagando el sistema. ¡Hasta luego!")
+        os.system("shutdown /s /f /t 1")
+        return "Apagando sistema"
+
+    def _action_change_name(self, user_input: str, intent: DecisionIntent) -> Optional[str]:
+        """Permite al usuario cambiar el nombre del asistente."""
+        self.speak("¿Cómo le gustaría llamarme?")
+        name = self._listen()
+        if not name:
+            self.speak("Lo siento, no pude escuchar eso.")
+            return None
+
+        self._save_name(name)
+        text = f"De acuerdo, a partir de ahora me llamaré {name}."
+        self.speak(text)
+        return text
+
+    def _action_exit(self, user_input: str, intent: DecisionIntent) -> str:
+        """Desconecta a Jarvis de forma amigable."""
+        self.speak("Desconectándome. ¡Que tenga un excelente día!")
+        self.is_running = False
+        return "exit"
+
+    # ==================== HELPERS ====================
+
+    @staticmethod
+    def _strip_query(user_input: str, words) -> str:
+        """Elimina palabras de relleno del input para quedarse con la consulta."""
+        query = user_input
+        for word in sorted(words, key=len, reverse=True):
+            query = query.replace(word, " ")
+        return " ".join(query.split()).strip(" ¿?¡!.,:-")
+
+    def _get_module_list(self) -> list:
+        """Lista de módulos inicializados."""
+        return [
+            "event_bus",
+            "error_handler",
+            "memory",
+            "intent_recognizer",
+            "decision_engine",
+        ]
+
+    # ==================== ESTADO DEL SISTEMA ====================
+
+    def get_status(self) -> Dict[str, Any]:
+        """Estado completo del sistema (para debugging y UI)."""
+        memory_stats = None
+        if self.memory:
+            try:
+                memory_stats = self._run_async(self.memory.get_stats())
+            except Exception:
+                memory_stats = None
+
+        return {
+            "name": self.config.system.name,
+            "version": self.config.system.version,
+            "state": self.state.value,
+            "is_running": self.is_running,
+            "modules_ready": self.modules_ready,
+            "session_id": self.decision_context.session_id,
+            "voice_available": self._voice_available,
+            "speech_recognition_available": self._sr_available,
+            "assistant_name": self._load_name(),
+            "modules": {
+                "event_bus": self.event_bus.get_stats() if self.event_bus else None,
+                "error_handler": self.error_handler.get_stats() if self.error_handler else None,
+                "memory": memory_stats,
+                "intent_recognizer": (
+                    len(self.intent_recognizer.get_available_intents())
+                    if self.intent_recognizer else 0
+                ),
+                "decision_history": (
+                    len(self.decision_engine.get_decision_history())
+                    if self.decision_engine else 0
+                ),
+            },
+        }
+
+    def __repr__(self) -> str:
+        return f"Orchestrator(state={self.state.value}, running={self.is_running})"
 
 
-# instancia global por conveniencia
-default_orchestrator = Orchestrator()
+# ==================== SINGLETON (bajo demanda) ====================
+# No se instancia al importar para evitar efectos secundarios
+# (inicializar voz y hilos en cada import). Se crea con get_orchestrator().
+
+default_orchestrator: Optional[Orchestrator] = None
+
+
+def get_orchestrator() -> Orchestrator:
+    """Obtiene (o crea) la instancia única del orquestador."""
+    global default_orchestrator
+    if default_orchestrator is None:
+        default_orchestrator = Orchestrator()
+    return default_orchestrator
+
+
+if __name__ == "__main__":
+    orchestrator = Orchestrator()
+    try:
+        orchestrator.run()
+    except KeyboardInterrupt:
+        orchestrator.stop()

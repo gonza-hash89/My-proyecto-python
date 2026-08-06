@@ -46,6 +46,7 @@ class DecisionConfig:
     """Configuración del motor de decisiones"""
     enabled: bool = True
     strategy: str = "confidence_based"  # confidence_based, context_aware
+    confidence_threshold: float = 0.5  # Confianza mínima para aceptar una decisión
     max_retries: int = 3
     timeout: int = 30
 

@@ -4,8 +4,14 @@ test_decision.py - Pruebas y ejemplos del motor de decisiones
 Demuestra cómo funciona el motor de decisiones de Jarvis en diferentes escenarios.
 """
 
+import sys
+import os
+
+# Asegurar que la carpeta jarvis esté en el path (esquema de imports estándar)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import datetime
-from jarvis.brain.decision import (
+from brain.decision import (
     DecisionEngine,
     Intent,
     DecisionContext,
@@ -14,8 +20,8 @@ from jarvis.brain.decision import (
     resolve_conflicts,
     can_execute_in_parallel,
 )
-from jarvis.core.logger import JarvisLogger, init_logger
-from jarvis.core.config import get_config
+from core.logger import JarvisLogger, init_logger
+from core.config import get_config
 
 
 def init_test_environment():

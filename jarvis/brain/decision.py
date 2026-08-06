@@ -20,8 +20,8 @@ from datetime import datetime
 import json
 from abc import ABC, abstractmethod
 
-from ..core.logger import JarvisLogger, AgentLogger, EventLogger
-from ..core.config import get_config, DecisionConfig
+from core.logger import JarvisLogger, AgentLogger, EventLogger
+from core.config import get_config, DecisionConfig
 
 
 # ==================== TIPOS DE DECISIONES ====================

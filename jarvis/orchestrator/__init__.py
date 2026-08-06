@@ -1,15 +1,63 @@
-"""Paquete de orquestador de Jarvis."""
+"""Paquete de orquestador de Jarvis.
 
-from .events import Event, make_event
-from .errors import OrchestratorError, EventNotFoundError, ListenerError
-from .orchestrator import Orchestrator, default_orchestrator
+Contiene el sistema de eventos, el manejo de errores y el orquestador central.
+"""
+
+from .events import (
+    Event,
+    make_event,
+    make_typed_event,
+    EventBus,
+    JarvisEvent,
+    EventPriority,
+    init_event_bus,
+    get_event_bus,
+)
+from .errors import (
+    OrchestratorError,
+    EventNotFoundError,
+    ListenerError,
+    CircuitOpenError,
+    AbortError,
+    ErrorSeverity,
+    RecoveryStrategy,
+    ErrorContext,
+    CircuitBreaker,
+    ErrorHandler,
+    init_error_handler,
+    get_error_handler,
+)
+from .orchestrator import (
+    Orchestrator,
+    JarvisState,
+    get_orchestrator,
+)
 
 __all__ = [
+    # Eventos
     "Event",
     "make_event",
+    "make_typed_event",
+    "EventBus",
+    "JarvisEvent",
+    "EventPriority",
+    "init_event_bus",
+    "get_event_bus",
+    # Errores
     "OrchestratorError",
     "EventNotFoundError",
     "ListenerError",
+    "CircuitOpenError",
+    "AbortError",
+    "ErrorSeverity",
+    "RecoveryStrategy",
+    "ErrorContext",
+    "CircuitBreaker",
+    "ErrorHandler",
+    "init_error_handler",
+    "get_error_handler",
+    # Orquestador
     "Orchestrator",
-    "default_orchestrator",
+    "JarvisState",
+    "get_orchestrator",
 ]
