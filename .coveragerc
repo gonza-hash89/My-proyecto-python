@@ -1,0 +1,9 @@
+[run]
+source = jarvis
+omit =
+    jarvis/tests/*
+    jarvis/brain/test_decision.py
+
+[report]
+show_missing = True
+skip_covered = True

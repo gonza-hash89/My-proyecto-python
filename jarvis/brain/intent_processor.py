@@ -3,15 +3,15 @@ brain/intent_processor.py - Reconocedor HÍBRIDO de intenciones (SEMANA 4, FASE 
 
 Fusión de las tres piezas de las fases previas:
     1. PatternMatcher (regex): rápido y preciso para comandos conocidos.
-    2. IntentMLModel (MultinomialNB + TF-IDF de palabras): generaliza lo que no matchea.
+    2. IntentMLModel (LinearSVC + TF-IDF de caracteres): generaliza lo que no matchea.
     3. EntityExtractor: entidades (slots) de la intención ganadora.
 
 Estrategia de fusión:
     - Se combina cada candidato: score = PATTERN_WEIGHT * conf_patron + ML_WEIGHT * prob_ml.
-    - Si el mejor patrón tiene confianza >= PATTERN_HIGH y coincide con el mejor
-      candidato combinado -> method="pattern" (camino rápido).
+    - Si el mejor patrón tiene confianza >= PATTERN_HIGH -> method="pattern"
+      (el patrón es autoritativo para comandos conocidos; el ML no lo desvía).
     - Sin coincidencia de patrones -> method="ml".
-    - Cualquier otra cosa (desacuerdo o baja confianza de patrón) -> method="hybrid".
+    - Cualquier otra cosa (patrones de baja confianza) -> method="hybrid".
 
 Compatibilidad:
     - process(text) -> IntentResult (nuevo)
@@ -116,9 +116,11 @@ class IntentProcessor:
         best = max(combined, key=combined.get) if combined else "unknown"
         best_pattern = pmatches[0] if pmatches else None
 
-        if best_pattern is not None and best_pattern.score >= PATTERN_HIGH \
-                and best == best_pattern.intent:
+        if best_pattern is not None and best_pattern.score >= PATTERN_HIGH:
+            # Patrón de alta confianza: es autoritativo para comandos conocidos.
+            # Evita que el ML (con probabilidades difusas) desvíe un match claro.
             method = "pattern"
+            best = best_pattern.intent
             confidence = p_scores[best]
         elif best_pattern is None:
             method = "ml"

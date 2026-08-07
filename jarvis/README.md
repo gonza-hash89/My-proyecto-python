@@ -27,8 +27,8 @@ Un asistente de voz inteligente en español e inglés que puede realizar múltip
 
 ### 1. Clonar el repositorio
 ```bash
-git clone https://github.com/gonza-hash89/My-proyecto-python.git
-cd My-proyecto-python/jarvis
+git clone https://github.com/gonza-hash89/Proyecto-Jarvis.git
+cd Proyecto-Jarvis/jarvis
 ```
 
 ### 2. Instalar dependencias
