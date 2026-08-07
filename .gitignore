@@ -1,4 +1,8 @@
 __pycache__/
 *.py[cod]
 *.db
+*.pkl
+.coverage
+.pytest_cache/
 logs/
+decision_history.json
