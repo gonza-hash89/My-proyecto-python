@@ -37,7 +37,7 @@ class IntentRecognizer:
         # Definir intenciones y sus palabras clave asociadas
         self.intent_keywords = {
             "watch_videos": {
-                "keywords": ["youtube", "video", "ver", "watch", "viralizar", "película", "película"],
+                "keywords": ["youtube", "video", "ver", "watch", "viralizar", "película"],
                 "variations": [
                     "abrir youtube",
                     "pon videos",
@@ -87,8 +87,9 @@ class IntentRecognizer:
             },
             
             "system_control": {
-                "keywords": ["apagar", "shutdown", "reiniciar", "restart", "bloquear", "lock", "dormr", "sleep"],
+                "keywords": ["apagar", "apaga", "shutdown", "reiniciar", "restart", "bloquear", "lock", "dormir", "sleep"],
                 "variations": [
+                    "apaga la computadora",
                     "apaga la máquina",
                     "reinicia el sistema",
                     "bloquea la pc",

@@ -22,7 +22,9 @@ import asyncio
 import concurrent.futures
 import os
 import random
+import re
 import sys
+import threading
 import time
 import webbrowser as wb
 from datetime import datetime
@@ -35,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config import get_config
 from core.logger import JarvisLogger, AgentLogger, init_logger
 from core.intent_recognizer import IntentRecognizer, Intent
+from brain.intent_processor import IntentProcessor, get_processor
 from brain.memory import MemoryManager
 from brain.decision import DecisionEngine, DecisionContext, Intent as DecisionIntent
 from orchestrator.events import (
@@ -199,10 +202,14 @@ class Orchestrator:
         self.memory = MemoryManager(db_path=db_path)
         self.logger.info("MemoryManager inicializado")
 
-        # 4. Reconocedor de intenciones
+        # 4. Reconocedor de intenciones (híbrido: regex + ML)
         self.intent_recognizer = IntentRecognizer()
+        self.intent_processor = get_processor()
         self.logger.info(
             f"IntentRecognizer inicializado ({len(self.intent_recognizer.get_available_intents())} intenciones)"
+        )
+        self.logger.info(
+            f"IntentProcessor híbrido inicializado ({self.intent_processor.pattern_matcher.get_intent_count()} intenciones)"
         )
 
         # 5. Motor de decisiones
@@ -521,7 +528,8 @@ class Orchestrator:
 
     def _recognize_intent(self, user_input: str) -> Optional[DecisionIntent]:
         """
-        Reconoce la intención del usuario usando IntentRecognizer.
+        Reconoce la intención del usuario con el reconocedor híbrido
+        (regex + ML). Usa el reconocedor legacy como respaldo.
 
         Returns:
             Intent del motor de decisiones, o None si no se reconoció.
@@ -529,13 +537,14 @@ class Orchestrator:
         self._publish(JarvisEvent.INTENT_RECOGNITION_STARTED, {"input": user_input})
 
         try:
-            result = self.intent_recognizer.recognize(user_input)
+            result = self.intent_processor.recognize(user_input)
 
-            if result.name == "unknown":
+            # Frases sin sentido: la fusión híbrida con baja confianza es "unknown"
+            if result.method != "pattern" and result.confidence < 0.25:
                 self.logger.warning(f"Intención no reconocida: {user_input}")
                 self._publish(
                     JarvisEvent.INTENT_RECOGNIZED,
-                    {"intent": "unknown", "confidence": 0.0},
+                    {"intent": "unknown", "confidence": result.confidence},
                 )
                 return None
 
@@ -547,7 +556,8 @@ class Orchestrator:
                 raw_text=user_input,
             )
             self.logger.info(
-                f"Intención: {intent.name} ({intent.confidence * 100:.0f}%)"
+                f"Intención: {intent.name} ({intent.confidence * 100:.0f}%) "
+                f"[{result.method}]"
             )
             self._publish(
                 JarvisEvent.INTENT_RECOGNIZED,
@@ -556,6 +566,23 @@ class Orchestrator:
             return intent
 
         except Exception as e:
+            # Fallback resiliente: si el procesador híbrido falla, intentamos
+            # con el reconocedor legacy (core/intent_recognizer.py).
+            self.logger.warning(
+                f"IntentProcessor falló ({e}); usando reconocedor legacy"
+            )
+            legacy_intent = self._recognize_legacy(user_input)
+            if legacy_intent is not None:
+                self._publish(
+                    JarvisEvent.INTENT_RECOGNIZED,
+                    {
+                        "intent": legacy_intent.name,
+                        "confidence": legacy_intent.confidence,
+                        "method": "legacy",
+                    },
+                )
+                return legacy_intent
+
             self.error_handler.handle(
                 exception=e,
                 operation="intent_recognition",
@@ -563,6 +590,26 @@ class Orchestrator:
                 strategy=RecoveryStrategy.SKIP,
             )
             return None
+
+    def _recognize_legacy(self, user_input: str) -> Optional[DecisionIntent]:
+        """Reconoce con el reconocedor legacy como último recurso."""
+        recognizer = getattr(self, "intent_recognizer", None)
+        if recognizer is None:
+            return None
+        try:
+            result = recognizer.recognize(user_input)
+        except Exception as exc:
+            self.logger.error(f"Reconocedor legacy falló: {exc}")
+            return None
+        if result.name == "unknown" or result.confidence < 0.3:
+            return None
+        return DecisionIntent(
+            id=f"intent_{int(time.time() * 1000)}",
+            name=result.name,
+            confidence=result.confidence,
+            parameters=result.entities,
+            raw_text=user_input,
+        )
 
     def _execute_intent(
         self,
@@ -592,6 +639,18 @@ class Orchestrator:
             "system_control": self._action_system_control,
             "change_name": self._action_change_name,
             "exit": self._action_exit,
+            "take_notes": self._action_take_notes,
+            "create_task": self._action_create_task,
+            "set_timer": self._action_set_timer,
+            "watch_streaming": self._action_streaming,
+            "play_podcast": self._action_podcast,
+            "news_query": self._action_news,
+            "directions": self._action_directions,
+            "traffic_info": self._action_traffic,
+            "book_ride": self._action_book_ride,
+            "flight_booking": self._action_flight_booking,
+            "hotel_booking": self._action_hotel_booking,
+            "weather_query": self._action_weather,
         }
 
         handler = actions.get(intent.name)
@@ -852,6 +911,209 @@ class Orchestrator:
         self.is_running = False
         return "exit"
 
+    # ==================== ACCIONES NUEVAS (SEMANA 4) ====================
+
+    def _action_take_notes(self, user_input: str, intent: DecisionIntent) -> str:
+        """Guarda una nota en un archivo de notas."""
+        note = intent.parameters.get("content") or intent.parameters.get("task")
+        if not note:
+            self.speak("¿Qué quieres que anote?")
+            return "Pregunta por contenido de nota"
+
+        path = self._notes_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(f"- [{datetime.now().strftime('%Y-%m-%d %H:%M')}] {note}\n")
+        text = f"Nota guardada: {note}"
+        self.speak(text)
+        return text
+
+    def _action_create_task(self, user_input: str, intent: DecisionIntent) -> str:
+        """Agrega una tarea a la lista de pendientes."""
+        task = intent.parameters.get("task_description") or intent.parameters.get("task")
+        if not task:
+            self.speak("¿Qué tarea quieres agregar?")
+            return "Pregunta por tarea"
+
+        path = self._tasks_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as file:
+            file.write(f"- [ ] {task}\n")
+        text = f"Tarea agregada: {task}"
+        self.speak(text)
+        return text
+
+    def _action_set_timer(self, user_input: str, intent: DecisionIntent) -> str:
+        """Programa un temporizador que avisa al cumplirse."""
+        seconds = self._parse_duration(user_input, intent.parameters.get("duration"))
+        if seconds <= 0:
+            seconds = 60
+            unit = "minuto"
+            amount = 1
+        else:
+            amount, unit = self._describe_duration(seconds)
+
+        self.speak(f"Temporizador de {amount} {unit}. ¡Avisaré cuando termine!")
+        threading.Timer(seconds, self._timer_finished, args=[amount, unit]).start()
+        return f"Temporizador programado: {amount} {unit}"
+
+    def _timer_finished(self, amount: int, unit: str) -> None:
+        """Callback del temporizador: avisa que terminó."""
+        message = f"¡Tiempo! Han pasado {amount} {unit}."
+        self.logger.info(f"[Jarvis] {message}")
+        print(f"[Jarvis] {message}")
+        if self._voice_available and self.engine is not None:
+            try:
+                self.engine.say(message)
+                self.engine.runAndWait()
+            except Exception:
+                pass
+
+    def _action_streaming(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre la plataforma de streaming pedida."""
+        platform = (intent.parameters.get("platform") or "").lower()
+        urls = {
+            "netflix": "https://www.netflix.com",
+            "prime": "https://www.primevideo.com",
+            "prime video": "https://www.primevideo.com",
+            "amazon prime": "https://www.primevideo.com",
+            "disney": "https://www.disneyplus.com",
+            "hbo": "https://www.hbomax.com",
+            "max": "https://www.max.com",
+        }
+        url = urls.get(platform, "https://www.netflix.com")
+        target = platform or "Netflix"
+        wb.open(url)
+        text = f"Abriendo {target}."
+        self.speak(text)
+        return text
+
+    def _action_podcast(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre la búsqueda del podcast en Spotify."""
+        query = intent.parameters.get("podcast_name") or ""
+        if query:
+            wb.open(f"https://open.spotify.com/search/{query.replace(' ', '%20')}")
+            text = f"Buscando el podcast {query} en Spotify."
+        else:
+            wb.open("https://open.spotify.com/search/podcast")
+            text = "Abriendo la sección de podcasts en Spotify."
+        self.speak(text)
+        return text
+
+    def _action_news(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre las noticias (Google News)."""
+        topic = intent.parameters.get("topic")
+        url = (
+            f"https://news.google.com/search?q={topic.replace(' ', '%20')}"
+            if topic else "https://news.google.com"
+        )
+        wb.open(url)
+        text = f"Abriendo las noticias{' de ' + topic if topic else ''}."
+        self.speak(text)
+        return text
+
+    def _action_directions(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre Google Maps con la ruta al destino."""
+        destination = intent.parameters.get("destination") or intent.parameters.get("location")
+        if not destination:
+            self.speak("¿A dónde quieres ir?")
+            return "Pregunta por destino"
+        wb.open(f"https://www.google.com/maps/dir/?api=1&destination={destination.replace(' ', '+')}")
+        text = f"Abriendo la ruta hacia {destination}."
+        self.speak(text)
+        return text
+
+    def _action_traffic(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre el tráfico de Google Maps."""
+        location = intent.parameters.get("location")
+        url = (
+            f"https://www.google.com/maps/search/traffic+{location.replace(' ', '+')}"
+            if location else "https://www.google.com/maps/search/traffic"
+        )
+        wb.open(url)
+        text = f"Abriendo el tráfico{' en ' + location if location else ''}."
+        self.speak(text)
+        return text
+
+    def _action_book_ride(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre Uber para pedir un viaje."""
+        wb.open("https://www.uber.com/es/mobile/")
+        self.speak("Abriendo Uber.")
+        return "Abriendo Uber"
+
+    def _action_flight_booking(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre Google Flights con el destino."""
+        destination = intent.parameters.get("destination") or intent.parameters.get("location")
+        url = (
+            f"https://www.google.com/travel/flights?q=flights+to+{destination.replace(' ', '+')}"
+            if destination else "https://www.google.com/travel/flights"
+        )
+        wb.open(url)
+        text = f"Buscando vuelos{' a ' + destination if destination else ''}."
+        self.speak(text)
+        return text
+
+    def _action_hotel_booking(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre la búsqueda de hoteles del destino."""
+        destination = intent.parameters.get("destination") or intent.parameters.get("location")
+        url = (
+            f"https://www.google.com/search?q=hoteles+en+{destination.replace(' ', '+')}"
+            if destination else "https://www.google.com/search?q=hoteles"
+        )
+        wb.open(url)
+        text = f"Buscando hoteles{' en ' + destination if destination else ''}."
+        self.speak(text)
+        return text
+
+    def _action_weather(self, user_input: str, intent: DecisionIntent) -> str:
+        """Abre el clima del lugar en el buscador."""
+        location = intent.parameters.get("location") or intent.parameters.get("city")
+        url = (
+            f"https://www.google.com/search?q=clima+{location.replace(' ', '+')}"
+            if location else "https://www.google.com/search?q=clima+hoy"
+        )
+        wb.open(url)
+        text = f"Abriendo el clima{' en ' + location if location else ' de hoy'}."
+        self.speak(text)
+        return text
+
+    def _notes_path(self) -> str:
+        return os.path.join(
+            self.config.base_dir, self.config.data_dir, "notas.md"
+        )
+
+    def _tasks_path(self) -> str:
+        return os.path.join(
+            self.config.base_dir, self.config.data_dir, "tareas.txt"
+        )
+
+    def _parse_duration(self, user_input: str, entity_duration: Optional[str]) -> int:
+        """Convierte '5 minutos' / 'una hora' a segundos."""
+        raw = entity_duration or user_input
+        m = re.search(r"(\d+)\s*(segundos?|minutos?|horas?|min|hr|s|m|h)", raw, re.IGNORECASE)
+        if not m:
+            # 'una hora' o 'media hora'
+            if "hora" in raw.lower():
+                return 3600
+            if "minuto" in raw.lower():
+                return 60
+            return 0
+        amount = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit.startswith(("s",)):
+            return amount
+        if unit.startswith(("m",)):
+            return amount * 60
+        return amount * 3600
+
+    @staticmethod
+    def _describe_duration(seconds: int):
+        if seconds % 3600 == 0:
+            return seconds // 3600, "hora" if seconds // 3600 == 1 else "horas"
+        if seconds % 60 == 0:
+            return seconds // 60, "minuto" if seconds // 60 == 1 else "minutos"
+        return seconds, "segundos"
+
     # ==================== HELPERS ====================
 
     @staticmethod
@@ -869,6 +1131,7 @@ class Orchestrator:
             "error_handler",
             "memory",
             "intent_recognizer",
+            "intent_processor",
             "decision_engine",
         ]
 
@@ -900,6 +1163,10 @@ class Orchestrator:
                 "intent_recognizer": (
                     len(self.intent_recognizer.get_available_intents())
                     if self.intent_recognizer else 0
+                ),
+                "intent_processor": (
+                    self.intent_processor.get_stats()
+                    if self.intent_processor else None
                 ),
                 "decision_history": (
                     len(self.decision_engine.get_decision_history())

@@ -364,16 +364,23 @@ class ConfidenceBasedStrategy(DecisionStrategy):
     ) -> Decision:
         """Crea una estructura Decision a partir de una intención"""
         
-        # Mapear intención a agente (lógica simplificada)
+        # Mapear intención a agente (debe coincidir con los nombres reales del IntentRecognizer)
         agent_map = {
+            # Entretenimiento / contenido
             "play_music": AgentType.DIALOG,
-            "search": AgentType.WEB,
-            "open": AgentType.SYSTEM,
-            "remember": AgentType.MEMORY,
-            "time": AgentType.SYSTEM,
-            "date": AgentType.SYSTEM,
-            "shutdown": AgentType.SYSTEM,
-            "say": AgentType.VOICE,
+            "watch_videos": AgentType.SYSTEM,
+            "tell_joke": AgentType.DIALOG,
+            # Información
+            "search_info": AgentType.WEB,
+            "time_query": AgentType.SYSTEM,
+            "date_query": AgentType.SYSTEM,
+            # Sistema
+            "system_control": AgentType.SYSTEM,
+            "open_application": AgentType.SYSTEM,
+            "take_screenshot": AgentType.SYSTEM,
+            # Identidad
+            "change_name": AgentType.DIALOG,
+            "exit": AgentType.SYSTEM,
         }
         
         # Seleccionar agente

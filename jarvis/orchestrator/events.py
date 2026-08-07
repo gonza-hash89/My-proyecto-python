@@ -200,6 +200,14 @@ class EventBus:
         Returns:
             True si el evento fue aceptado
         """
+        # Compatibilidad con agentes que publican mensajes crudos (dict):
+        # los convertimos a Event para que el bus sea un "puerto USB" universal.
+        if isinstance(event, dict):
+            event = Event(
+                name=event.get("name") or event.get("type", "unknown"),
+                payload=event,
+            )
+
         with self._lock:
             self._total_published += 1
 
