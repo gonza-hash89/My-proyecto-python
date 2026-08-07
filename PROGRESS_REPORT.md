@@ -1,9 +1,9 @@
 """
 PROGRESS_REPORT.md - Reporte de progreso del proyecto JARVIS
 
-Generado: 2026-07-06
-Semana: 2 (Cerebro Central)
-Estado: ✅ SEMANA 2 COMPLETADA
+Generado: 2026-08-07
+Semana: 4 (Intent Recognizer Híbrido)
+Estado: ✅ SEMANA 4 COMPLETADA
 """
 
 # 📊 REPORTE DE PROGRESO - PROYECTO JARVIS
@@ -14,20 +14,77 @@ Estado: ✅ SEMANA 2 COMPLETADA
 |---------|--------|---|
 | **SEMANA 1** (Core Base) | ✅ COMPLETADO | 100% |
 | **SEMANA 2** (Cerebro Central) | ✅ COMPLETADO | 100% |
-| **SEMANA 3** (Integración) | 📅 PENDIENTE | 0% |
+| **SEMANA 3** (Integración) | ✅ COMPLETADO | 100% |
+| **SEMANA 4** (Intent Recognizer Híbrido) | ✅ COMPLETADO | 100% |
 | **SEMANA 4-5** (Agentes Esenciales) | 📅 PENDIENTE | 0% |
-| **Proyecto General** | ⏳ EN PROGRESO | 20% |
+| **Proyecto General** | ⏳ EN PROGRESO | 35% |
 
 ## 📈 Gráfico de Progreso
 
 ```
 Semana 1 (Core):      ████████████████████ 100% ✅
 Semana 2 (Cerebro):   ████████████████████ 100% ✅
-Semana 3 (Integración): ░░░░░░░░░░░░░░░░░░░░   0% 📅
-Semana 4-5 (Agentes):  ░░░░░░░░░░░░░░░░░░░░   0% 📅
+Semana 3 (Integración): ████████████████████ 100% ✅
+Semana 4 (Intent):    ████████████████████ 100% ✅
+Semana 5 (Agentes):   ░░░░░░░░░░░░░░░░░░░░   0% 📅
 Semana 6 (Refinamiento):░░░░░░░░░░░░░░░░░░░░   0% 📅
 ──────────────────────────────────────────────────
-Total Proyecto:        ████░░░░░░░░░░░░░░░░  20% ⏳
+Total Proyecto:        ███████░░░░░░░░░░░░░  35% ⏳
+```
+
+## ✅ LO QUE SE COMPLETÓ EN SEMANA 4 (Intent Recognizer Híbrido)
+
+### 1. Catálogo de Intenciones (`intent_data.py`)
+```
+✅ 52 intenciones en 7 categorías (Básicas 10, Entretenimiento 10, Hogar 8,
+   Finanzas 7, Salud 5, Productividad 7, Viajes 5)
+✅ Patrones ES + EN por intención + variaciones
+✅ Dataset de entrenamiento: 1275 ejemplos bilingües deterministas
+   (mínimo 16 por intención, generado con TEMPLATES + FILLERS)
+```
+
+### 2. Patrones y Entidades (`intent_patterns.py`, `intent_entities.py`)
+```
+✅ PatternMatcher: 468+ regex compilados, score por coincidencia
+   (0.95+ patrón, 0.7 substring, 0.5 palabra clave)
+✅ Velocidad: ~4.4ms promedio, <5ms P50 (mediana) - meta cumplida
+✅ detect_language(): lexicón ES/EN + fallback langdetect → es/en/mixed
+✅ EntityExtractor: números/montos, fechas, duraciones, personas,
+   lugares, temas por categoría (ES + EN)
+```
+
+### 3. Modelo ML (`intent_ml.py`)
+```
+✅ Pipeline: TfidfVectorizer(char_wb 2-4) + LinearSVC
+✅ Accuracy 92.9% en split 80/20 (meta ≥ 88%)
+✅ Persistencia con joblib en data/intent_model.pkl + retraining automático
+✅ Decisión de diseño: MultinomialNB quedaba en ~83%; char_wb + LinearSVC
+   alcanza 90-95% estable con varias semillas
+```
+
+### 4. Procesador Híbrido (`intent_processor.py`)
+```
+✅ Fusión: score = 0.6*patrón + 0.4*ML
+✅ Métodos: pattern (confianza ≥ 0.90), ml (sin patrón), hybrid
+✅ Fallback unknown bajo umbral 0.25
+✅ IntentResult con .name/.intent compatibles con IntentRecognizer legacy
+✅ Estadísticas por método + latencia; singleton get_processor()
+```
+
+### 5. Integración (`orchestrator.py`) + Acciones
+```
+✅ _recognize_intent usa el híbrido; core/intent_recognizer.py = fallback
+✅ 12 acciones nuevas: notas, tareas, temporizador, streaming (Netflix/Prime/
+   Disney/HBO), podcast (Spotify), noticias, mapas/rutas/tráfico, Uber,
+   vuelos, hoteles, clima (sin API keys)
+✅ Agent map de decision.py alineado con los nombres reales de intenciones
+```
+
+### 6. Tests (`jarvis/tests/`) - 76 pruebas
+```
+✅ 7 archivos: datos, patrones, entidades, ML, híbrido, acciones, bilingüe
+✅ test_intent_bilingual.py: 100+ pares ES/EN (52 intenciones × 2 idiomas)
+✅ python -m pytest jarvis/tests -q → 76 passed
 ```
 
 ## ✅ LO QUE SE COMPLETÓ EN SEMANA 2

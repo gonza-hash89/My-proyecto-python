@@ -1,6 +1,6 @@
 # 🤖 Jarvis - Asistente de Voz en Python
 
-Un asistente de voz inteligente en español que puede realizar múltiples tareas.
+Un asistente de voz inteligente en español e inglés que puede realizar múltiples tareas.
 
 ## ✨ Características
 
@@ -14,6 +14,14 @@ Un asistente de voz inteligente en español que puede realizar múltiples tareas
 - 😂 Contar chistes
 - 🖥️ Control del sistema (apagar, reiniciar)
 - 📝 Sistema de nombre personalizado
+- 🧠 **Intent Recognizer HÍBRIDO** (regex + ML) con 52 intenciones bilingües ES/EN
+- ⚡ Detección de idioma automática (es/en/mixed)
+- 🎯 Extracción de entidades (montos, fechas, duraciones, personas, temas)
+- 📋 Notas y tareas (`data/notas.md`, `data/tareas.txt`)
+- ⏰ Temporizadores locales
+- 📺 Streaming (Netflix/Prime/Disney/HBO), podcasts, noticias
+- 🗺️ Mapas, rutas, tráfico, Uber, vuelos y hoteles
+- 🌦️ Clima (buscador web)
 
 ## 📦 Instalación
 
